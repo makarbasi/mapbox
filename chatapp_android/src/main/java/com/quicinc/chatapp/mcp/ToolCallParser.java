@@ -161,10 +161,20 @@ public class ToolCallParser {
             if (!jsonStr.startsWith("{")) {
                 jsonStr = "{" + jsonStr;
             }
-            if (!jsonStr.endsWith("}")) {
+
+            // Balance braces: count { and } and add missing closing braces
+            int openCount = 0;
+            int closeCount = 0;
+            for (char c : jsonStr.toCharArray()) {
+                if (c == '{') openCount++;
+                else if (c == '}') closeCount++;
+            }
+            while (closeCount < openCount) {
                 jsonStr = jsonStr + "}";
+                closeCount++;
             }
 
+            Log.i(TAG, "Attempting JSON parse (" + jsonStr.length() + " chars)");
             JSONObject json = new JSONObject(jsonStr);
 
             // Get tool name — from JSON "name" field or from the tag name
@@ -186,7 +196,7 @@ public class ToolCallParser {
                 arguments.remove("name");
             }
 
-            Log.i(TAG, "Parsed tool call: " + name + " with " + arguments.length() + " args");
+            Log.e("toolcalling", "Parsed tool call: " + name + " with args: " + arguments.toString());
             return new ToolCall(name, arguments);
         } catch (Exception e) {
             Log.w(TAG, "JSON parse failed: " + e.getMessage() + " | content: " + content.substring(0, Math.min(100, content.length())));
