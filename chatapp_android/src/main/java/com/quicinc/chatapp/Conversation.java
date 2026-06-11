@@ -52,9 +52,10 @@ public class Conversation extends AppCompatActivity {
     // Location & Mapbox
     private LocationHelper locationHelper;
     private MapboxToolRegistry toolRegistry;
-    private double currentLat = 0;
-    private double currentLon = 0;
-    private boolean locationAvailable = false;
+    // Hardcoded to San Diego, CA (downtown / Gaslamp Quarter)
+    private double currentLat = 32.7157;
+    private double currentLon = -117.1611;
+    private boolean locationAvailable = true;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
