@@ -206,7 +206,8 @@ public class Conversation extends AppCompatActivity {
                                         // Execute the tool
                                         String toolResult = toolRegistry.execute(
                                             toolCall.getToolName(), toolCall.getArguments());
-                                        Log.i(TAG, "Tool result: " + toolResult.substring(0, Math.min(200, toolResult.length())));
+                                        Log.i(TAG, "Tool result (" + toolResult.length() + " chars): "
+                                            + toolResult.substring(0, Math.min(200, toolResult.length())));
 
                                         // Check for map image in result
                                         try {
@@ -225,6 +226,14 @@ public class Conversation extends AppCompatActivity {
                                             // Not JSON or no map URL — that's fine
                                         }
 
+                                        // Truncate tool result to fit in 2048-token context.
+                                        // Mapbox MCP returns large JSON — the LLM only needs
+                                        // key info to summarize, not every detail.
+                                        String truncatedResult = toolResult;
+                                        if (truncatedResult.length() > 500) {
+                                            truncatedResult = truncatedResult.substring(0, 500) + "...(truncated)";
+                                        }
+
                                         // Add new bot message placeholder for continued response
                                         runOnUiThread(() -> {
                                             int newBotPos = adapter.getItemCount();
@@ -232,9 +241,10 @@ public class Conversation extends AppCompatActivity {
                                             adapter.notifyItemInserted(newBotPos);
                                         });
 
-                                        // Feed tool result back to LLM
+                                        // Feed truncated tool result back to LLM
                                         fullResponse.setLength(0);
-                                        genieWrapper.submitToolResponse(toolResult, new StringCallback() {
+                                        final String resultForLlm = truncatedResult;
+                                        genieWrapper.submitToolResponse(resultForLlm, new StringCallback() {
                                             @Override
                                             public void onNewString(String response) {
                                                 fullResponse.append(response);
