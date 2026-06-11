@@ -185,6 +185,15 @@ public class Conversation extends AppCompatActivity {
                                     }
                                 });
 
+                                // DEBUG: Log the full LLM response to see what it generated
+                                String llmOutput = fullResponse.toString();
+                                Log.e("toolcalling", "=== LLM FULL RESPONSE (" + llmOutput.length() + " chars) ===");
+                                Log.e("toolcalling", llmOutput);
+                                Log.e("toolcalling", "=== toolRegistry null? " + (toolRegistry == null) + " ===");
+                                Log.e("toolcalling", "=== hasToolCall? " + ToolCallParser.hasToolCall(llmOutput) + " ===");
+                                Log.e("toolcalling", "=== contains <tool_call>? " + llmOutput.contains("<tool_call>") + " ===");
+                                Log.e("toolcalling", "=== contains </tool_call>? " + llmOutput.contains("</tool_call>") + " ===");
+
                                 // Tool-calling loop
                                 if (toolRegistry != null) {
                                     int round = 0;
@@ -192,7 +201,7 @@ public class Conversation extends AppCompatActivity {
                                         ToolCall toolCall = ToolCallParser.parse(fullResponse.toString());
                                         if (toolCall == null) break;
 
-                                        Log.i(TAG, "Tool call detected: " + toolCall.getToolName());
+                                        Log.e("toolcalling", "Tool call detected: " + toolCall.getToolName());
 
                                         // Show tool status in chat
                                         runOnUiThread(() -> {
