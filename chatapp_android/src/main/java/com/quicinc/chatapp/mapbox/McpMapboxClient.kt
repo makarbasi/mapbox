@@ -169,21 +169,36 @@ class McpMapboxClient(private val accessToken: String) {
     /**
      * Build a compact tools prompt for the LLM system prompt.
      * Must be very short — model context is only 2048 tokens.
+     * Includes ultra-short descriptions so the model picks the right tool.
      */
     fun buildToolsPrompt(): String {
         if (tools.isEmpty()) return ""
 
+        // Hardcoded short hints per tool name — the MCP descriptions are too verbose
+        val hints = mapOf(
+            "directions_tool" to "get route between two points",
+            "directions" to "get route between two points",
+            "geocode_forward_tool" to "address/place to coordinates",
+            "search_geocode" to "address/place to coordinates",
+            "geocode_reverse_tool" to "coordinates to address",
+            "reverse_geocode" to "coordinates to address",
+            "search_poi_tool" to "find nearby places like Starbucks, restaurants, gas stations",
+            "category_search" to "find nearby places like Starbucks, restaurants, gas stations",
+            "static_map_image_tool" to "generate a map image (use LAST)",
+            "static_map" to "generate a map image (use LAST)"
+        )
+
         val sb = StringBuilder()
-        sb.appendLine("Use tools by responding with: <tool_call>{\"name\":\"TOOL\",\"arguments\":{...}}</tool_call>")
+        sb.appendLine("To use a tool respond ONLY with: <tool_call>{\"name\":\"TOOL\",\"arguments\":{...}}</tool_call>")
         sb.appendLine("Tools:")
 
         for (tool in tools) {
-            // Just name and params — no descriptions to save tokens
             val params = tool.inputSchema.properties?.keys?.joinToString(",") ?: ""
-            sb.appendLine("${tool.name}($params)")
+            val hint = hints[tool.name] ?: ""
+            sb.appendLine("${tool.name}($params) - $hint")
         }
 
-        sb.appendLine("One tool per response. After result, answer briefly.")
+        sb.appendLine("Pick the RIGHT tool for the task. Answer briefly after getting results.")
         return sb.toString()
     }
 
