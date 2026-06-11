@@ -23,6 +23,7 @@ import androidx.recyclerview.widget.SimpleItemAnimator;
 import com.quicinc.chatapp.location.HomeAddressManager;
 import com.quicinc.chatapp.location.LocationHelper;
 import com.quicinc.chatapp.mapbox.MapboxToolRegistry;
+import com.quicinc.chatapp.mcp.ToolArgSanitizer;
 import com.quicinc.chatapp.mcp.ToolCall;
 import com.quicinc.chatapp.mcp.ToolCallParser;
 import com.quicinc.chatapp.mcp.ToolResultFormatter;
@@ -213,11 +214,16 @@ public class Conversation extends AppCompatActivity {
                                             recyclerView.scrollToPosition(toolMsgPos);
                                         });
 
-                                        // Execute the tool
+                                        // Sanitize LLM arguments before sending to MCP
+                                        JSONObject sanitizedArgs = ToolArgSanitizer.sanitize(
+                                            toolCall.getToolName(), toolCall.getArguments(),
+                                            currentLat, currentLon);
+
+                                        // Execute the tool with cleaned arguments
                                         String toolResult = toolRegistry.execute(
-                                            toolCall.getToolName(), toolCall.getArguments());
-                                        Log.i(TAG, "Tool result (" + toolResult.length() + " chars): "
-                                            + toolResult.substring(0, Math.min(200, toolResult.length())));
+                                            toolCall.getToolName(), sanitizedArgs);
+                                        Log.e("toolcalling", "Tool result (" + toolResult.length() + " chars): "
+                                            + toolResult.substring(0, Math.min(300, toolResult.length())));
 
                                         // Check for map image in result
                                         try {
