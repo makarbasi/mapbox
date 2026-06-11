@@ -25,6 +25,7 @@ import com.quicinc.chatapp.location.LocationHelper;
 import com.quicinc.chatapp.mapbox.MapboxToolRegistry;
 import com.quicinc.chatapp.mcp.ToolCall;
 import com.quicinc.chatapp.mcp.ToolCallParser;
+import com.quicinc.chatapp.mcp.ToolResultFormatter;
 
 import org.json.JSONObject;
 
@@ -226,13 +227,12 @@ public class Conversation extends AppCompatActivity {
                                             // Not JSON or no map URL — that's fine
                                         }
 
-                                        // Truncate tool result to fit in 2048-token context.
-                                        // Mapbox MCP returns large JSON — the LLM only needs
-                                        // key info to summarize, not every detail.
-                                        String truncatedResult = toolResult;
-                                        if (truncatedResult.length() > 500) {
-                                            truncatedResult = truncatedResult.substring(0, 500) + "...(truncated)";
-                                        }
+                                        // Pre-process MCP result into simple text.
+                                        // The 3B model can't reliably parse raw JSON,
+                                        // so we extract key info in Java first.
+                                        String formattedResult = ToolResultFormatter.format(
+                                            toolCall.getToolName(), toolResult);
+                                        Log.i(TAG, "Formatted for LLM: " + formattedResult);
 
                                         // Add new bot message placeholder for continued response
                                         runOnUiThread(() -> {
@@ -241,9 +241,10 @@ public class Conversation extends AppCompatActivity {
                                             adapter.notifyItemInserted(newBotPos);
                                         });
 
-                                        // Feed truncated tool result back to LLM
+                                        // Feed formatted result back to LLM with instruction
                                         fullResponse.setLength(0);
-                                        final String resultForLlm = truncatedResult;
+                                        final String resultForLlm = "Result: " + formattedResult
+                                            + "\nAnswer the user's question based on this.";
                                         genieWrapper.submitToolResponse(resultForLlm, new StringCallback() {
                                             @Override
                                             public void onNewString(String response) {
