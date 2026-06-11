@@ -1,0 +1,1 @@
+apply from: "../_shared/android/common.gradle"
