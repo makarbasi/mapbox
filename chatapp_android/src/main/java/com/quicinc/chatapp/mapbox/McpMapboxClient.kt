@@ -219,19 +219,41 @@ class McpMapboxClient(private val accessToken: String) {
 
     /**
      * Convert an org.json.JSONObject to a Map for MCP tool call arguments.
+     * Handles primitives, arrays, and nested objects recursively.
      */
-    private fun convertToJsonObject(jsonObject: JSONObject): Map<String, JsonPrimitive> {
-        val map = mutableMapOf<String, JsonPrimitive>()
+    private fun convertToJsonObject(jsonObject: JSONObject): Map<String, kotlinx.serialization.json.JsonElement> {
+        val map = mutableMapOf<String, kotlinx.serialization.json.JsonElement>()
         val keys = jsonObject.keys()
         while (keys.hasNext()) {
             val key = keys.next()
-            when (val value = jsonObject.get(key)) {
-                is String -> map[key] = JsonPrimitive(value)
-                is Number -> map[key] = JsonPrimitive(value)
-                is Boolean -> map[key] = JsonPrimitive(value)
-                else -> map[key] = JsonPrimitive(value.toString())
-            }
+            map[key] = convertValue(jsonObject.get(key))
         }
         return map
+    }
+
+    private fun convertValue(value: Any?): kotlinx.serialization.json.JsonElement {
+        return when (value) {
+            null, JSONObject.NULL -> kotlinx.serialization.json.JsonNull
+            is String -> JsonPrimitive(value)
+            is Number -> JsonPrimitive(value)
+            is Boolean -> JsonPrimitive(value)
+            is JSONObject -> {
+                val map = mutableMapOf<String, kotlinx.serialization.json.JsonElement>()
+                val keys = value.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    map[k] = convertValue(value.get(k))
+                }
+                kotlinx.serialization.json.JsonObject(map)
+            }
+            is org.json.JSONArray -> {
+                val list = mutableListOf<kotlinx.serialization.json.JsonElement>()
+                for (i in 0 until value.length()) {
+                    list.add(convertValue(value.get(i)))
+                }
+                kotlinx.serialization.json.JsonArray(list)
+            }
+            else -> JsonPrimitive(value.toString())
+        }
     }
 }

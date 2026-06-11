@@ -129,14 +129,14 @@ public class ToolArgSanitizer {
             fixed.put("coordinates", args.get("coordinates"));
         }
 
-        // Set routing profile — the LLM often puts "driving" in "geometries"
-        String profile = "driving";
+        // Set routing profile — must have "mapbox/" prefix
+        String profile = "mapbox/driving";
         if (args.has("routing_profile")) {
-            profile = args.getString("routing_profile");
+            profile = ensureMapboxPrefix(args.getString("routing_profile"));
         } else if (args.has("geometries") && isRoutingProfile(args.getString("geometries"))) {
-            profile = args.getString("geometries");
+            profile = ensureMapboxPrefix(args.getString("geometries"));
         } else if (args.has("profile")) {
-            profile = args.getString("profile");
+            profile = ensureMapboxPrefix(args.getString("profile"));
         }
         fixed.put("routing_profile", profile);
 
@@ -241,8 +241,16 @@ public class ToolArgSanitizer {
         return fixed;
     }
 
+    private static String ensureMapboxPrefix(String profile) {
+        if (profile.startsWith("mapbox/")) return profile;
+        return "mapbox/" + profile;
+    }
+
     private static boolean isRoutingProfile(String value) {
-        return value != null && (value.equals("driving") || value.equals("walking")
-            || value.equals("cycling") || value.equals("driving-traffic"));
+        if (value == null) return false;
+        // Accept with or without mapbox/ prefix
+        String v = value.replace("mapbox/", "");
+        return v.equals("driving") || v.equals("walking")
+            || v.equals("cycling") || v.equals("driving-traffic");
     }
 }
