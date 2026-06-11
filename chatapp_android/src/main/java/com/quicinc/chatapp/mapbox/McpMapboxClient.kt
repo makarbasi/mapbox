@@ -28,9 +28,25 @@ class McpMapboxClient(private val accessToken: String) {
     companion object {
         private const val TAG = "McpMapboxClient"
         private const val MAPBOX_MCP_URL = "https://mcp.mapbox.com/mcp"
+
+        // Only include tools useful for our use case — the MCP server returns 15+
+        // but the 2048-token context can't fit them all.
+        private val ALLOWED_TOOLS = setOf(
+            "directions_tool",
+            "directions",
+            "geocode_forward_tool",
+            "search_geocode",
+            "geocode_reverse_tool",
+            "reverse_geocode",
+            "search_poi_tool",
+            "category_search",
+            "static_map_image_tool",
+            "static_map"
+        )
     }
 
     private var client: Client? = null
+    private var allTools: List<Tool> = emptyList()
     private var tools: List<Tool> = emptyList()
     private var connected = false
 
@@ -69,8 +85,16 @@ class McpMapboxClient(private val accessToken: String) {
 
                 // Discover available tools
                 val listResult = mcpClient.listTools()
-                tools = listResult.tools
-                Log.i(TAG, "Discovered ${tools.size} tools:")
+                allTools = listResult.tools
+                Log.i(TAG, "Server has ${allTools.size} tools total")
+
+                // Filter to only useful tools
+                tools = allTools.filter { it.name.lowercase() in ALLOWED_TOOLS.map { t -> t.lowercase() } }
+                if (tools.isEmpty()) {
+                    // If no exact match, take first 5
+                    tools = allTools.take(5)
+                }
+                Log.i(TAG, "Using ${tools.size} tools:")
                 tools.forEach { tool ->
                     Log.i(TAG, "  - ${tool.name}: ${tool.description}")
                 }
@@ -87,9 +111,14 @@ class McpMapboxClient(private val accessToken: String) {
     }
 
     /**
-     * Returns the list of tools discovered from the MCP server.
+     * Returns the filtered list of tools.
      */
     fun getTools(): List<Tool> = tools
+
+    /**
+     * Returns all tools from the MCP server (for settings display).
+     */
+    fun getAllTools(): List<Tool> = allTools
 
     /**
      * Returns true if connected to the MCP server.
@@ -138,33 +167,23 @@ class McpMapboxClient(private val accessToken: String) {
     }
 
     /**
-     * Build a tools prompt string from the discovered MCP tools
-     * for injection into the LLM system prompt.
+     * Build a compact tools prompt for the LLM system prompt.
+     * Must be very short — model context is only 2048 tokens.
      */
     fun buildToolsPrompt(): String {
         if (tools.isEmpty()) return ""
 
         val sb = StringBuilder()
-        sb.appendLine("You have access to Mapbox location tools. To use a tool, respond ONLY with:")
-        sb.appendLine("""<tool_call>{"name":"TOOL_NAME","arguments":{...}}</tool_call>""")
-        sb.appendLine()
-        sb.appendLine("Available tools:")
+        sb.appendLine("Use tools by responding with: <tool_call>{\"name\":\"TOOL\",\"arguments\":{...}}</tool_call>")
+        sb.appendLine("Tools:")
 
         for (tool in tools) {
-            sb.appendLine("- ${tool.name}")
-            tool.description?.let { sb.appendLine("  $it") }
-            // Include parameter schema if available
-            tool.inputSchema.properties?.let { props ->
-                val paramNames = props.keys.joinToString(", ")
-                if (paramNames.isNotEmpty()) {
-                    sb.appendLine("  Parameters: $paramNames")
-                }
-            }
+            // Just name and params — no descriptions to save tokens
+            val params = tool.inputSchema.properties?.keys?.joinToString(",") ?: ""
+            sb.appendLine("${tool.name}($params)")
         }
 
-        sb.appendLine()
-        sb.appendLine("You can chain multiple tool calls. After receiving results, provide a helpful natural language answer.")
-        sb.appendLine("When showing locations on a map, use the map tool as your LAST tool call.")
+        sb.appendLine("One tool per response. After result, answer briefly.")
         return sb.toString()
     }
 

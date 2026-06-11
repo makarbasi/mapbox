@@ -39,7 +39,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public class Conversation extends AppCompatActivity {
 
     private static final String TAG = "ChatApp";
-    private static final int MAX_TOOL_ROUNDS = 5;
+    private static final int MAX_TOOL_ROUNDS = 2;
 
     ArrayList<ChatMessage> messages = new ArrayList<ChatMessage>(1000);
 
@@ -178,6 +178,7 @@ public class Conversation extends AppCompatActivity {
                                 genieWrapper.getResponseForPrompt(enhancedPrompt, new StringCallback() {
                                     @Override
                                     public void onNewString(String response) {
+
                                         fullResponse.append(response);
                                         streamingCallback.onNewString(response);
                                     }
