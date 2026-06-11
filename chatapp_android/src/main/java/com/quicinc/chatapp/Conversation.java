@@ -93,6 +93,7 @@ public class Conversation extends AppCompatActivity {
             String htpExtensionsDir = bundle.getString(cConversationActivityKeyHtpConfig);
             String modelName = bundle.getString(cConversationActivityKeyModelName);
             String externalCacheDir = this.getExternalCacheDir().getAbsolutePath().toString();
+            externalCacheDir="/data/local/tmp/chatapp";
             String modelDir = Paths.get(externalCacheDir, "models", modelName).toString();
 
             // Load Model

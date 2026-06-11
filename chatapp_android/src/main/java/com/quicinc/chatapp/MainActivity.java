@@ -90,7 +90,7 @@ public class MainActivity extends AppCompatActivity {
             // As of now, only Snapdragon Gen 3 and 8 Elite is supported.
             HashMap<String, String> supportedSocModel = new HashMap<>();
             supportedSocModel.putIfAbsent("SM8750", "qualcomm-snapdragon-8-elite.json");
-            supportedSocModel.putIfAbsent("SM8650", "qualcomm-snapdragon-8-gen3.json");
+            supportedSocModel.putIfAbsent("SA8797P", "qualcomm-snapdragon-8-gen3.json");
             supportedSocModel.putIfAbsent("QCS8550", "qualcomm-snapdragon-8-gen2.json");
 
             String socModel = android.os.Build.SOC_MODEL;
@@ -107,16 +107,7 @@ public class MainActivity extends AppCompatActivity {
             //  - <assets>/htp_config/
             //      - has SM8750.json and SM8650.json and picked up according to device SOC Model at runtime.
             String externalDir = getExternalCacheDir().getAbsolutePath();
-            try {
-                // Copy assets to External cache if not already present
-                copyAssetsDir("models", externalDir.toString());
-                copyAssetsDir("htp_config", externalDir.toString());
-            } catch (IOException e) {
-                String errorMsg = "Error during copying model asset to external storage: " + e.toString();
-                Log.e("ChatApp", errorMsg);
-                Toast.makeText(this, errorMsg, Toast.LENGTH_SHORT).show();
-                finish();
-            }
+            externalDir="/data/local/tmp/chatapp/";
             Path htpExtConfigPath = Paths.get(externalDir, "htp_config", supportedSocModel.get(socModel));
 
             // Read model name from metadata.json (downloaded alongside model binaries)
