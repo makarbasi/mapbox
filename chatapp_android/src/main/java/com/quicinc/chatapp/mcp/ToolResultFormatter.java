@@ -28,6 +28,7 @@ public class ToolResultFormatter {
      */
     public static String format(String toolName, String rawResult) {
         try {
+            Log.e("toolcalling", rawResult );
             // Try to parse as JSON and extract key info
             String summary = extractSummary(toolName, rawResult);
             if (summary != null && !summary.isEmpty()) {
