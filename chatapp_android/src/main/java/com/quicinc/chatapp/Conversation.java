@@ -215,14 +215,16 @@ public class Conversation extends AppCompatActivity {
                                             recyclerView.scrollToPosition(toolMsgPos);
                                         });
 
-                                        // Sanitize LLM arguments before sending to MCP
-                                        JSONObject sanitizedArgs = ToolArgSanitizer.sanitize(
+                                        // Build correct args from context — LLM only picks the tool
+                                        String homeAddr = HomeAddressManager.getHomeAddress(Conversation.this);
+                                        JSONObject builtArgs = ToolArgSanitizer.buildArgs(
                                             toolCall.getToolName(), toolCall.getArguments(),
-                                            currentLat, currentLon);
+                                            enhancedPrompt, currentLat, currentLon,
+                                            homeAddr != null ? homeAddr : "");
 
-                                        // Execute the tool with cleaned arguments
+                                        // Execute the tool with built arguments
                                         String toolResult = toolRegistry.execute(
-                                            toolCall.getToolName(), sanitizedArgs);
+                                            toolCall.getToolName(), builtArgs);
                                         Log.e("toolcalling", "Tool result (" + toolResult.length() + " chars): "
                                             + toolResult.substring(0, Math.min(300, toolResult.length())));
 
