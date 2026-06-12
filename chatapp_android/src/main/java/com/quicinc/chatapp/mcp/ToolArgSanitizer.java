@@ -82,16 +82,15 @@ public class ToolArgSanitizer {
         JSONArray coordinates = new JSONArray();
 
         // Origin = current GPS
-        JSONArray origin = new JSONArray();
-        origin.put(lon);   // longitude first (GeoJSON)
-        origin.put(lat);
+        JSONObject origin = new JSONObject();
+        origin.put("longitude", lon);
+        origin.put("latitude", lat);
         coordinates.put(origin);
 
         // Destination = slightly offset (TODO: geocode home address first)
-        // For now, offset by ~1 mile north as placeholder
-        JSONArray dest = new JSONArray();
-        dest.put(lon + 0.005);
-        dest.put(lat + 0.005);
+        JSONObject dest = new JSONObject();
+        dest.put("longitude", lon + 0.005);
+        dest.put("latitude", lat + 0.005);
         coordinates.put(dest);
 
         args.put("coordinates", coordinates);
