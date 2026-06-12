@@ -13,194 +13,258 @@ import java.util.regex.Pattern;
 /**
  * ToolCallParser: Parses LLM output for tool calls.
  *
- * The 3B model doesn't reliably follow a specific format.
- * It may generate tool calls as:
- *   - <tool_call>{"name":"X","arguments":{...}}</tool_call>   (what we ask for)
- *   - <directions_tool>{"name":"X","arguments":{...}}</directions_tool>  (tool name as tag)
- *   - <directions_tool>\n"name": "X",\n"arguments": {...}\n</directions_tool>  (loose JSON)
+ * The 3B model is unreliable with structured output. It may:
+ *   - Use <tool_call>...</tool_call> tags
+ *   - Use <tool_name>...</tool_name> tags (sometimes without closing >)
+ *   - Miss closing tags entirely
+ *   - Output loose JSON with "name" and "arguments" fields
  *
- * This parser handles all three formats.
+ * This parser doesn't rely on tags at all. Instead, it looks for
+ * JSON patterns containing "name" and "arguments" fields.
  */
 public class ToolCallParser {
 
     private static final String TAG = "ToolCallParser";
 
-    // Pattern 1: <tool_call>...</tool_call>
-    private static final String TOOL_CALL_START = "<tool_call>";
-    private static final String TOOL_CALL_END = "</tool_call>";
-
-    // Pattern 2: <any_tool_name>...</any_tool_name> — regex to find XML-like tags ending with _tool
-    // Matches: <directions_tool>...</directions_tool>, <search_poi_tool>...</search_poi_tool>, etc.
-    private static final Pattern TOOL_TAG_PATTERN = Pattern.compile(
-        "<(\\w+_tool)>(.*?)</\\1>",
-        Pattern.DOTALL
-    );
-
-    // Also match tags without _tool suffix, like <directions>...</directions>
-    private static final Pattern GENERIC_TAG_PATTERN = Pattern.compile(
-        "<(\\w+)>\\s*\\{?\\s*\"name\"\\s*:\\s*\"(\\w+)\".*?</\\1>",
-        Pattern.DOTALL
-    );
+    // Known tool name suffixes/patterns the LLM might reference
+    private static final String[] KNOWN_TOOLS = {
+        "directions_tool", "directions",
+        "geocode_forward_tool", "search_geocode",
+        "geocode_reverse_tool", "reverse_geocode",
+        "search_poi_tool", "category_search",
+        "static_map_image_tool", "static_map"
+    };
 
     /**
-     * hasToolCall: Checks whether the LLM output contains any recognizable tool call.
+     * hasToolCall: Checks whether the LLM output contains any tool call.
+     * Looks for known tool names OR "name" + "arguments" JSON pattern.
      */
     public static boolean hasToolCall(String llmOutput) {
         if (llmOutput == null || llmOutput.isEmpty()) return false;
 
-        // Check standard format
-        if (llmOutput.contains(TOOL_CALL_START) && llmOutput.contains(TOOL_CALL_END)) {
-            return true;
+        String lower = llmOutput.toLowerCase();
+
+        // Check for any known tool name in the output
+        for (String tool : KNOWN_TOOLS) {
+            if (lower.contains(tool.toLowerCase())) {
+                // Also make sure it looks like a tool call, not just a mention
+                if (lower.contains("\"name\"") || lower.contains("<" + tool.toLowerCase())
+                    || lower.contains("arguments")) {
+                    return true;
+                }
+            }
         }
 
-        // Check <toolname>...</toolname> format
-        Matcher m = TOOL_TAG_PATTERN.matcher(llmOutput);
-        if (m.find()) return true;
+        // Check for generic tool_call tags
+        if (lower.contains("<tool_call>")) return true;
 
-        // Check generic tag with "name" field inside
-        m = GENERIC_TAG_PATTERN.matcher(llmOutput);
-        return m.find();
+        return false;
     }
 
     /**
-     * parse: Extracts and parses a tool call from LLM output.
-     * Handles multiple formats the 3B model may generate.
-     *
-     * @param llmOutput raw text output from the LLM
-     * @return a ToolCall instance, or null if parsing fails
+     * parse: Extracts a tool call from LLM output.
+     * Tries multiple strategies in order of reliability.
      */
     public static ToolCall parse(String llmOutput) {
         if (llmOutput == null || llmOutput.isEmpty()) return null;
 
-        // Try standard <tool_call> format first
-        ToolCall result = parseStandardFormat(llmOutput);
+        // Strategy 1: Standard <tool_call>{json}</tool_call>
+        ToolCall result = parseStandardTags(llmOutput);
         if (result != null) return result;
 
-        // Try <toolname>...</toolname> format
-        result = parseToolNameTagFormat(llmOutput);
+        // Strategy 2: Find "name" field and extract tool name + arguments
+        result = parseJsonPattern(llmOutput);
         if (result != null) return result;
 
-        Log.w(TAG, "No parseable tool call found in LLM output");
+        // Strategy 3: Find <toolname> tag (with or without closing >)
+        result = parseToolNameTag(llmOutput);
+        if (result != null) return result;
+
+        Log.w(TAG, "No parseable tool call found");
         return null;
     }
 
     /**
-     * Parse standard format: <tool_call>{"name":"X","arguments":{...}}</tool_call>
+     * Strategy 1: <tool_call>{"name":"X","arguments":{...}}</tool_call>
      */
-    private static ToolCall parseStandardFormat(String llmOutput) {
-        if (!llmOutput.contains(TOOL_CALL_START) || !llmOutput.contains(TOOL_CALL_END)) {
-            return null;
-        }
+    private static ToolCall parseStandardTags(String output) {
+        int start = output.lastIndexOf("<tool_call>");
+        if (start < 0) return null;
+        int contentStart = start + "<tool_call>".length();
 
-        try {
-            int startIndex = llmOutput.lastIndexOf(TOOL_CALL_START);
-            int endIndex = llmOutput.indexOf(TOOL_CALL_END, startIndex);
-            if (startIndex < 0 || endIndex < 0) return null;
+        int end = output.indexOf("</tool_call>", contentStart);
+        if (end < 0) end = output.length(); // No closing tag — take rest
 
-            String jsonContent = llmOutput.substring(
-                startIndex + TOOL_CALL_START.length(), endIndex).trim();
-            return parseJsonContent(jsonContent, null);
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to parse standard tool_call format: " + e.getMessage());
-            return null;
-        }
+        String json = output.substring(contentStart, end).trim();
+        return parseJsonContent(json, null);
     }
 
     /**
-     * Parse tool-name-as-tag format: <directions_tool>...</directions_tool>
-     * The LLM uses the tool name itself as the XML tag.
+     * Strategy 2: Look for "name" : "tool_name" pattern anywhere in the output.
+     * Then try to extract "arguments" object.
      */
-    private static ToolCall parseToolNameTagFormat(String llmOutput) {
-        try {
-            Matcher m = TOOL_TAG_PATTERN.matcher(llmOutput);
-            String tagName = null;
-            String content = null;
+    private static ToolCall parseJsonPattern(String output) {
+        // Find "name" : "some_tool_name"
+        Pattern namePattern = Pattern.compile(
+            "\"name\"\\s*:\\s*\"([^\"]+)\"",
+            Pattern.CASE_INSENSITIVE
+        );
+        Matcher nameMatcher = namePattern.matcher(output);
+        if (!nameMatcher.find()) return null;
 
-            // Find the last match
-            while (m.find()) {
-                tagName = m.group(1);
-                content = m.group(2);
-            }
+        String toolName = nameMatcher.group(1).trim();
+        // Normalize: "Directions Tool" → "directions_tool"
+        toolName = normalizeToolName(toolName);
 
-            if (tagName == null || content == null) {
-                // Try broader pattern for non _tool suffixed tags
-                m = GENERIC_TAG_PATTERN.matcher(llmOutput);
-                while (m.find()) {
-                    tagName = m.group(1);
-                    content = m.group(0);
-                    // Extract content between tags
-                    int start = content.indexOf(">") + 1;
-                    int end = content.lastIndexOf("<");
-                    if (start > 0 && end > start) {
-                        content = content.substring(start, end);
+        Log.i(TAG, "Found tool name via JSON pattern: " + toolName);
+
+        // Try to extract "arguments" : { ... }
+        int argsStart = output.indexOf("\"arguments\"", nameMatcher.end());
+        if (argsStart < 0) {
+            argsStart = output.indexOf("\"arguments\"");
+        }
+
+        JSONObject arguments = new JSONObject();
+        if (argsStart >= 0) {
+            // Find the opening { after "arguments" :
+            int braceStart = output.indexOf("{", argsStart);
+            if (braceStart >= 0) {
+                // Find matching closing brace
+                String argsJson = extractBalancedBraces(output, braceStart);
+                if (argsJson != null) {
+                    try {
+                        arguments = new JSONObject(argsJson);
+                    } catch (Exception e) {
+                        Log.w(TAG, "Failed to parse arguments JSON: " + e.getMessage());
                     }
                 }
             }
-
-            if (tagName == null || content == null) return null;
-
-            Log.i(TAG, "Found tool tag: <" + tagName + ">, content length: " + content.length());
-            return parseJsonContent(content.trim(), tagName);
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to parse tool-name-tag format: " + e.getMessage());
-            return null;
         }
+
+        Log.e("toolcalling", "Parsed (strategy 2): " + toolName + " args=" + arguments.toString());
+        return new ToolCall(toolName, arguments);
     }
 
     /**
-     * Parse JSON content from inside a tool call tag.
-     * Handles both strict JSON and loose "key": "value" format.
-     *
-     * @param content the text between the tags
-     * @param fallbackToolName if the JSON doesn't have "name", use this (the tag name)
+     * Strategy 3: Find <toolname or <toolname> tag and extract content.
      */
-    private static ToolCall parseJsonContent(String content, String fallbackToolName) {
+    private static ToolCall parseToolNameTag(String output) {
+        for (String tool : KNOWN_TOOLS) {
+            String tagOpen = "<" + tool;
+            int idx = output.toLowerCase().lastIndexOf(tagOpen.toLowerCase());
+            if (idx < 0) continue;
+
+            // Skip past the tag (may or may not have closing >)
+            int contentStart = output.indexOf(">", idx);
+            if (contentStart < 0) {
+                // No > found — tag is malformed, skip past tag name
+                contentStart = idx + tagOpen.length();
+            } else {
+                contentStart++; // skip the >
+            }
+
+            // Find closing tag if it exists
+            String tagClose = "</" + tool + ">";
+            int contentEnd = output.indexOf(tagClose, contentStart);
+            if (contentEnd < 0) contentEnd = output.length();
+
+            String content = output.substring(contentStart, contentEnd).trim();
+            if (content.isEmpty()) continue;
+
+            Log.i(TAG, "Found tool tag <" + tool + ">, content: " + content.length() + " chars");
+            ToolCall result = parseJsonContent(content, tool);
+            if (result != null) return result;
+        }
+        return null;
+    }
+
+    /**
+     * Parse JSON content, handling missing braces.
+     */
+    private static ToolCall parseJsonContent(String content, String fallbackName) {
         try {
-            // Ensure content looks like JSON — wrap in braces if needed
             String jsonStr = content.trim();
+
+            // Wrap in braces if needed
             if (!jsonStr.startsWith("{")) {
                 jsonStr = "{" + jsonStr;
             }
 
-            // Balance braces: count { and } and add missing closing braces
-            int openCount = 0;
-            int closeCount = 0;
+            // Balance braces
+            int open = 0, close = 0;
             for (char c : jsonStr.toCharArray()) {
-                if (c == '{') openCount++;
-                else if (c == '}') closeCount++;
+                if (c == '{') open++;
+                else if (c == '}') close++;
             }
-            while (closeCount < openCount) {
-                jsonStr = jsonStr + "}";
-                closeCount++;
+            while (close < open) {
+                jsonStr += "}";
+                close++;
             }
 
-            Log.i(TAG, "Attempting JSON parse (" + jsonStr.length() + " chars)");
             JSONObject json = new JSONObject(jsonStr);
 
-            // Get tool name — from JSON "name" field or from the tag name
             String name = json.optString("name", "");
-            if (name.isEmpty() && fallbackToolName != null) {
-                name = fallbackToolName;
+            if (name.isEmpty() && fallbackName != null) {
+                name = fallbackName;
             }
-            if (name.isEmpty()) {
-                Log.w(TAG, "No tool name found in JSON or tag");
-                return null;
-            }
+            name = normalizeToolName(name);
 
-            // Get arguments
+            if (name.isEmpty()) return null;
+
             JSONObject arguments = json.optJSONObject("arguments");
             if (arguments == null) {
-                // Maybe all the fields ARE the arguments (no nested "arguments" key)
-                // Remove "name" and treat the rest as arguments
                 arguments = new JSONObject(jsonStr);
                 arguments.remove("name");
             }
 
-            Log.e("toolcalling", "Parsed tool call: " + name + " with args: " + arguments.toString());
+            Log.e("toolcalling", "Parsed tool: " + name + " args=" + arguments.toString());
             return new ToolCall(name, arguments);
         } catch (Exception e) {
-            Log.w(TAG, "JSON parse failed: " + e.getMessage() + " | content: " + content.substring(0, Math.min(100, content.length())));
+            Log.w(TAG, "JSON parse failed: " + e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Extract a balanced {...} substring starting at braceStart.
+     */
+    private static String extractBalancedBraces(String text, int braceStart) {
+        int depth = 0;
+        for (int i = braceStart; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '{') depth++;
+            else if (c == '}') depth--;
+            if (depth == 0) {
+                return text.substring(braceStart, i + 1);
+            }
+        }
+        // Unbalanced — return what we have and close it
+        return text.substring(braceStart) + "}";
+    }
+
+    /**
+     * Normalize tool names the LLM might generate.
+     * "Directions Tool" → "directions_tool"
+     * "directions" → "directions_tool" (if not already a known tool)
+     */
+    private static String normalizeToolName(String name) {
+        if (name == null || name.isEmpty()) return "";
+
+        // Replace spaces with underscores, lowercase
+        String normalized = name.toLowerCase().trim().replaceAll("\\s+", "_");
+
+        // Check if it's already a known tool
+        for (String tool : KNOWN_TOOLS) {
+            if (tool.equalsIgnoreCase(normalized)) return tool;
+        }
+
+        // Try adding _tool suffix
+        String withSuffix = normalized + "_tool";
+        for (String tool : KNOWN_TOOLS) {
+            if (tool.equalsIgnoreCase(withSuffix)) return tool;
+        }
+
+        // Return as-is
+        return normalized;
     }
 }
