@@ -26,13 +26,17 @@ public class ToolCallParser {
 
     private static final String TAG = "ToolCallParser";
 
-    // Known tool name suffixes/patterns the LLM might reference
+    // Known tool names from the Mapbox MCP server (verified via MCP Inspector).
     private static final String[] KNOWN_TOOLS = {
-        "directions_tool", "directions",
-        "geocode_forward_tool", "search_geocode",
-        "geocode_reverse_tool", "reverse_geocode",
-        "search_poi_tool", "category_search",
-        "static_map_image_tool", "static_map"
+        "ground_location_tool",
+        "search_and_geocode_tool",
+        "category_search_tool",
+        "directions_tool",
+        "reverse_geocode_tool",
+        "static_map_image_tool",
+        "isochrone_tool",
+        "distance_tool",
+        "nearest_point_tool"
     };
 
     /**
@@ -47,9 +51,11 @@ public class ToolCallParser {
         // Check for any known tool name in the output
         for (String tool : KNOWN_TOOLS) {
             if (lower.contains(tool.toLowerCase())) {
-                // Also make sure it looks like a tool call, not just a mention
+                // Tool name found — check if it looks like a call (not just a mention)
                 if (lower.contains("\"name\"") || lower.contains("<" + tool.toLowerCase())
-                    || lower.contains("arguments")) {
+                    || lower.contains("arguments")
+                    || lower.contains("[" + tool.toLowerCase() + "(")
+                    || lower.contains(tool.toLowerCase() + "(")) {
                     return true;
                 }
             }
@@ -68,8 +74,13 @@ public class ToolCallParser {
     public static ToolCall parse(String llmOutput) {
         if (llmOutput == null || llmOutput.isEmpty()) return null;
 
+        // Strategy 0: Bracket function-call syntax [tool_name(key=val, ...)]
+        // The 3B model often outputs this Python-like format instead of XML/JSON.
+        ToolCall result = parseBracketFunctionCall(llmOutput);
+        if (result != null) return result;
+
         // Strategy 1: Standard <tool_call>{json}</tool_call>
-        ToolCall result = parseStandardTags(llmOutput);
+        result = parseStandardTags(llmOutput);
         if (result != null) return result;
 
         // Strategy 2: Find "name" field and extract tool name + arguments
@@ -82,6 +93,143 @@ public class ToolCallParser {
 
         Log.w(TAG, "No parseable tool call found");
         return null;
+    }
+
+    /**
+     * Strategy 0: Parse bracket function-call syntax.
+     * Handles formats like:
+     *   [category_search_tool(category="pharmacy", limit=5, ...)]
+     *   [search_and_geocode_tool(query="Starbucks", longitude=-117.16)]
+     *
+     * The 3B model commonly uses this format, ignoring the XML tag instructions.
+     */
+    private static ToolCall parseBracketFunctionCall(String output) {
+        for (String tool : KNOWN_TOOLS) {
+            // Match: [tool_name( or tool_name( — with or without brackets
+            String lowerOutput = output.toLowerCase();
+            String lowerTool = tool.toLowerCase();
+
+            int toolIdx = lowerOutput.indexOf(lowerTool + "(");
+            if (toolIdx < 0) continue;
+
+            // Find the opening ( after the tool name
+            int parenStart = output.indexOf("(", toolIdx);
+            if (parenStart < 0) continue;
+
+            // Find the matching closing )
+            int parenEnd = findMatchingParen(output, parenStart);
+            if (parenEnd < 0) parenEnd = output.length() - 1;
+
+            String argsStr = output.substring(parenStart + 1, parenEnd).trim();
+            Log.i(TAG, "Bracket call found: " + tool + ", raw args: " + argsStr);
+
+            // Parse key=value pairs into a JSONObject
+            JSONObject arguments = parseKeyValueArgs(argsStr);
+
+            Log.e("toolcalling", "Parsed (strategy 0 bracket): " + tool + " args=" + arguments.toString());
+            return new ToolCall(tool, arguments);
+        }
+        return null;
+    }
+
+    /**
+     * Find the closing parenthesis matching the one at openIdx.
+     */
+    private static int findMatchingParen(String text, int openIdx) {
+        int depth = 0;
+        boolean inQuote = false;
+        for (int i = openIdx; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '"' && (i == 0 || text.charAt(i - 1) != '\\')) {
+                inQuote = !inQuote;
+            }
+            if (!inQuote) {
+                if (c == '(') depth++;
+                else if (c == ')') {
+                    depth--;
+                    if (depth == 0) return i;
+                }
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Parse key=value argument pairs from a function-call string.
+     * Handles: category="pharmacy", limit=5, proximity="home"
+     * Also handles bracket values like bbox=[-117.16, 32.71, ...]
+     */
+    private static JSONObject parseKeyValueArgs(String argsStr) {
+        JSONObject args = new JSONObject();
+        if (argsStr == null || argsStr.isEmpty()) return args;
+
+        try {
+            // Split on commas, but not commas inside quotes or brackets
+            int depth = 0;
+            boolean inQuote = false;
+            StringBuilder current = new StringBuilder();
+
+            for (int i = 0; i < argsStr.length(); i++) {
+                char c = argsStr.charAt(i);
+                if (c == '"' && (i == 0 || argsStr.charAt(i - 1) != '\\')) {
+                    inQuote = !inQuote;
+                }
+                if (!inQuote) {
+                    if (c == '[' || c == '(') depth++;
+                    else if (c == ']' || c == ')') depth--;
+                }
+
+                if (c == ',' && depth == 0 && !inQuote) {
+                    addKeyValue(args, current.toString().trim());
+                    current.setLength(0);
+                } else {
+                    current.append(c);
+                }
+            }
+            // Last pair
+            if (current.length() > 0) {
+                addKeyValue(args, current.toString().trim());
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Error parsing key=value args: " + e.getMessage());
+        }
+        return args;
+    }
+
+    /**
+     * Parse a single key=value pair and add to JSONObject.
+     */
+    private static void addKeyValue(JSONObject args, String pair) {
+        int eq = pair.indexOf('=');
+        if (eq < 0) return;
+
+        String key = pair.substring(0, eq).trim();
+        String val = pair.substring(eq + 1).trim();
+
+        try {
+            // Remove surrounding quotes
+            if (val.startsWith("\"") && val.endsWith("\"")) {
+                args.put(key, val.substring(1, val.length() - 1));
+            } else if (val.startsWith("[")) {
+                // Array — try to parse as JSONArray
+                args.put(key, new org.json.JSONArray(val));
+            } else if (val.equalsIgnoreCase("true") || val.equalsIgnoreCase("false")) {
+                args.put(key, Boolean.parseBoolean(val));
+            } else {
+                // Try number
+                try {
+                    if (val.contains(".")) {
+                        args.put(key, Double.parseDouble(val));
+                    } else {
+                        args.put(key, Integer.parseInt(val));
+                    }
+                } catch (NumberFormatException e) {
+                    args.put(key, val);
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to add key=" + key + " val=" + val);
+        }
     }
 
     /**
@@ -177,6 +325,9 @@ public class ToolCallParser {
         }
         return null;
     }
+
+    // Note: parseBracketFunctionCall, findMatchingParen, parseKeyValueArgs,
+    // and addKeyValue are defined above parse() as Strategy 0.
 
     /**
      * Parse JSON content, handling missing braces.
