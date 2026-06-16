@@ -129,12 +129,12 @@ public class ToolArgSanitizer {
 
     /**
      * Brand/POI Search (search_and_geocode_tool): specific brand like Starbucks, CVS.
-     * Proximity lat/lon narrows results to nearby.
+     * Server expects field name 'q' (not 'query').
      */
     private static JSONObject buildSearchArgs(String query, double lat, double lon)
             throws Exception {
         JSONObject args = new JSONObject();
-        args.put("query", query);
+        args.put("q", query);
         args.put("longitude", lon);
         args.put("latitude", lat);
         return args;
@@ -142,12 +142,12 @@ public class ToolArgSanitizer {
 
     /**
      * Category Search (category_search_tool): generic category like "coffee shops".
-     * Uses proximity lat/lon to find nearby matches.
+     * Server expects field name 'q' (not 'query').
      */
     private static JSONObject buildCategoryArgs(String query, double lat, double lon)
             throws Exception {
         JSONObject args = new JSONObject();
-        args.put("query", query);
+        args.put("q", query);
         args.put("longitude", lon);
         args.put("latitude", lat);
         return args;
