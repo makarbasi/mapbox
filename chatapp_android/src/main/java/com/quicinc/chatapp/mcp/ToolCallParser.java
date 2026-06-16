@@ -75,8 +75,12 @@ public class ToolCallParser {
         if (llmOutput == null || llmOutput.isEmpty()) return null;
 
         // Strategy 0: Bracket function-call syntax [tool_name(key=val, ...)]
-        // The 3B model often outputs this Python-like format instead of XML/JSON.
         ToolCall result = parseBracketFunctionCall(llmOutput);
+        if (result != null) return result;
+
+        // Strategy 0.5: XML self-closing tag <tool_name key="val" ... />
+        // The 3B model often outputs this HTML/XML attribute format.
+        result = parseXmlSelfClosingTag(llmOutput);
         if (result != null) return result;
 
         // Strategy 1: Standard <tool_call>{json}</tool_call>
@@ -105,31 +109,118 @@ public class ToolCallParser {
      */
     private static ToolCall parseBracketFunctionCall(String output) {
         for (String tool : KNOWN_TOOLS) {
-            // Match: [tool_name( or tool_name( — with or without brackets
             String lowerOutput = output.toLowerCase();
             String lowerTool = tool.toLowerCase();
 
             int toolIdx = lowerOutput.indexOf(lowerTool + "(");
             if (toolIdx < 0) continue;
 
-            // Find the opening ( after the tool name
             int parenStart = output.indexOf("(", toolIdx);
             if (parenStart < 0) continue;
 
-            // Find the matching closing )
             int parenEnd = findMatchingParen(output, parenStart);
             if (parenEnd < 0) parenEnd = output.length() - 1;
 
             String argsStr = output.substring(parenStart + 1, parenEnd).trim();
             Log.i(TAG, "Bracket call found: " + tool + ", raw args: " + argsStr);
 
-            // Parse key=value pairs into a JSONObject
             JSONObject arguments = parseKeyValueArgs(argsStr);
 
             Log.e("toolcalling", "Parsed (strategy 0 bracket): " + tool + " args=" + arguments.toString());
             return new ToolCall(tool, arguments);
         }
         return null;
+    }
+
+    /**
+     * Strategy 0.5: Parse XML self-closing tags with attributes.
+     * Handles formats like:
+     *   <search_and_geocode_tool q="CVS" language="en" proximity="home" />
+     *   <directions_tool origin="home" destination="work" />
+     *
+     * The 3B model frequently uses this XML-attribute format.
+     */
+    private static ToolCall parseXmlSelfClosingTag(String output) {
+        for (String tool : KNOWN_TOOLS) {
+            String tagPrefix = "<" + tool;
+            String lowerOutput = output.toLowerCase();
+            int idx = lowerOutput.lastIndexOf(tagPrefix.toLowerCase());
+            if (idx < 0) continue;
+
+            // Extract the full tag content between < and >
+            // Could be self-closing /> or just >
+            int tagEnd = output.indexOf(">", idx);
+            if (tagEnd < 0) continue;
+
+            String tagContent = output.substring(idx + 1, tagEnd).trim();
+            // Remove trailing / if self-closing
+            if (tagContent.endsWith("/")) {
+                tagContent = tagContent.substring(0, tagContent.length() - 1).trim();
+            }
+
+            // Remove the tool name prefix to get just the attributes
+            String toolNameInTag = tagContent;
+            if (toolNameInTag.toLowerCase().startsWith(tool.toLowerCase())) {
+                toolNameInTag = tagContent.substring(tool.length()).trim();
+            }
+
+            if (toolNameInTag.isEmpty()) continue; // No attributes — not this format
+
+            Log.i(TAG, "XML self-closing tag found: " + tool + ", attrs: " + toolNameInTag);
+
+            // Parse XML-style attributes: key="value" key2="value2"
+            JSONObject arguments = parseXmlAttributes(toolNameInTag);
+
+            Log.e("toolcalling", "Parsed (strategy 0.5 xml-attr): " + tool + " args=" + arguments.toString());
+            return new ToolCall(tool, arguments);
+        }
+        return null;
+    }
+
+    /**
+     * Parse XML-style attributes: key="value" key2="value2"
+     * Also handles unquoted values and key=value without quotes.
+     */
+    private static JSONObject parseXmlAttributes(String attrString) {
+        JSONObject args = new JSONObject();
+        if (attrString == null || attrString.isEmpty()) return args;
+
+        // Match key="value" or key='value' patterns
+        Pattern attrPattern = Pattern.compile(
+            "(\\w+)\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|(\\S+))"
+        );
+        Matcher matcher = attrPattern.matcher(attrString);
+
+        while (matcher.find()) {
+            String key = matcher.group(1);
+            String val = matcher.group(2); // double-quoted
+            if (val == null) val = matcher.group(3); // single-quoted
+            if (val == null) val = matcher.group(4); // unquoted
+            if (val == null) continue;
+
+            try {
+                // Try to parse as number
+                if (val.matches("-?\\d+\\.\\d+")) {
+                    args.put(key, Double.parseDouble(val));
+                } else if (val.matches("-?\\d+")) {
+                    args.put(key, Integer.parseInt(val));
+                } else if (val.equalsIgnoreCase("true") || val.equalsIgnoreCase("false")) {
+                    args.put(key, Boolean.parseBoolean(val));
+                } else if (val.startsWith("[")) {
+                    // Array value
+                    try {
+                        args.put(key, new org.json.JSONArray(val));
+                    } catch (Exception e) {
+                        args.put(key, val);
+                    }
+                } else {
+                    args.put(key, val);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to parse attr " + key + "=" + val);
+            }
+        }
+        return args;
     }
 
     /**

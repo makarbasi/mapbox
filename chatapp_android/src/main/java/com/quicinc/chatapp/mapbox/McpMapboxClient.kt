@@ -166,33 +166,27 @@ class McpMapboxClient(private val accessToken: String) {
     /**
      * Build a compact tools prompt for the LLM system prompt.
      * Must be very short — model context is only 2048 tokens.
-     * Includes ultra-short descriptions so the model picks the right tool.
+     * Only 4 core tools. No param lists (ToolArgSanitizer builds args from GPS).
+     * Format matches what the 3B model naturally outputs (<tool query="..." />).
      */
     fun buildToolsPrompt(): String {
         if (tools.isEmpty()) return ""
 
-        // Hardcoded short hints per tool name — the MCP descriptions are too verbose.
-        // Names match actual Mapbox MCP server (verified via MCP Inspector).
-        val hints = mapOf(
-            "ground_location_tool"    to "what is near me / neighborhood / reverse geocode + POI",
-            "search_and_geocode_tool" to "find a specific brand or chain: Starbucks, CVS, McDonald's",
-            "category_search_tool"    to "find generic category: coffee shops, restaurants, gas stations",
-            "directions_tool"         to "get driving/walking route between two points",
-            "reverse_geocode_tool"    to "convert coordinates to address",
-            "static_map_image_tool"   to "generate a map image (use LAST, after finding location)"
-        )
-
         val sb = StringBuilder()
-        sb.appendLine("To use a tool respond ONLY with: <tool_call>{\"name\":\"TOOL\",\"arguments\":{...}}</tool_call>")
+        sb.appendLine("You have tools. To call one, respond ONLY with the tag below, nothing else:")
+        sb.appendLine("<TOOL query=\"...\"/>")
+        sb.appendLine("")
         sb.appendLine("Tools:")
-
-        for (tool in tools) {
-            val params = tool.inputSchema.properties?.keys?.joinToString(",") ?: ""
-            val hint = hints[tool.name] ?: ""
-            sb.appendLine("${tool.name}($params) - $hint")
-        }
-
-        sb.appendLine("Pick the RIGHT tool for the task. Answer briefly after getting results.")
+        sb.appendLine("search_and_geocode_tool — find a specific place/brand: CVS, Starbucks, McDonald's, Target")
+        sb.appendLine("category_search_tool — find by type: pharmacy, coffee, restaurant, gas station")
+        sb.appendLine("directions_tool — get driving route")
+        sb.appendLine("ground_location_tool — what is near me")
+        sb.appendLine("")
+        sb.appendLine("Examples:")
+        sb.appendLine("User: closest CVS → <search_and_geocode_tool query=\"CVS\"/>")
+        sb.appendLine("User: nearest coffee shop → <category_search_tool query=\"coffee shop\"/>")
+        sb.appendLine("User: directions home → <directions_tool query=\"home\"/>")
+        sb.appendLine("User: what is around me → <ground_location_tool query=\"nearby\"/>")
         return sb.toString()
     }
 
