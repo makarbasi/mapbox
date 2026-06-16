@@ -29,19 +29,16 @@ class McpMapboxClient(private val accessToken: String) {
         private const val TAG = "McpMapboxClient"
         private const val MAPBOX_MCP_URL = "https://mcp.mapbox.com/mcp"
 
-        // Only include tools useful for our use case — the MCP server returns 15+
+        // Only include tools useful for our use case — the MCP server returns 30
         // but the 2048-token context can't fit them all.
+        // Tool names verified against https://mcp.mapbox.com/mcp via MCP Inspector.
         private val ALLOWED_TOOLS = setOf(
-            "directions_tool",
-            "directions",
-            "geocode_forward_tool",
-            "search_geocode",
-            "geocode_reverse_tool",
-            "reverse_geocode",
-            "search_poi_tool",
-            "category_search",
-            "static_map_image_tool",
-            "static_map"
+            "ground_location_tool",      // what's near me, reverse geocode + POI combined
+            "search_and_geocode_tool",   // specific brands/chains (Starbucks, CVS, etc.)
+            "category_search_tool",      // generic categories (coffee shops, restaurants)
+            "directions_tool",           // turn-by-turn routing
+            "reverse_geocode_tool",      // coords → address
+            "static_map_image_tool"      // generate a map image
         )
     }
 
@@ -174,18 +171,15 @@ class McpMapboxClient(private val accessToken: String) {
     fun buildToolsPrompt(): String {
         if (tools.isEmpty()) return ""
 
-        // Hardcoded short hints per tool name — the MCP descriptions are too verbose
+        // Hardcoded short hints per tool name — the MCP descriptions are too verbose.
+        // Names match actual Mapbox MCP server (verified via MCP Inspector).
         val hints = mapOf(
-            "directions_tool" to "get route between two points",
-            "directions" to "get route between two points",
-            "geocode_forward_tool" to "address/place to coordinates",
-            "search_geocode" to "address/place to coordinates",
-            "geocode_reverse_tool" to "coordinates to address",
-            "reverse_geocode" to "coordinates to address",
-            "search_poi_tool" to "find nearby places like Starbucks, restaurants, gas stations",
-            "category_search" to "find nearby places like Starbucks, restaurants, gas stations",
-            "static_map_image_tool" to "generate a map image (use LAST)",
-            "static_map" to "generate a map image (use LAST)"
+            "ground_location_tool"    to "what is near me / neighborhood / reverse geocode + POI",
+            "search_and_geocode_tool" to "find a specific brand or chain: Starbucks, CVS, McDonald's",
+            "category_search_tool"    to "find generic category: coffee shops, restaurants, gas stations",
+            "directions_tool"         to "get driving/walking route between two points",
+            "reverse_geocode_tool"    to "convert coordinates to address",
+            "static_map_image_tool"   to "generate a map image (use LAST, after finding location)"
         )
 
         val sb = StringBuilder()

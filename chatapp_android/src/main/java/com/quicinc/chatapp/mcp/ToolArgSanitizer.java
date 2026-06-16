@@ -37,17 +37,32 @@ public class ToolArgSanitizer {
             String nameLower = toolName.toLowerCase();
 
             JSONObject args;
-            if (nameLower.contains("direction")) {
-                args = buildDirectionsArgs(currentLat, currentLon, homeAddress);
-            } else if (nameLower.contains("search") || nameLower.contains("poi")
-                       || nameLower.contains("category")) {
+            if (nameLower.equals("ground_location_tool")) {
+                // Combined reverse geocode + nearby POI — uses GPS + query from user message
+                String query = extractSearchQuery(llmArgs, userMessage);
+                args = buildGroundLocationArgs(query, currentLat, currentLon);
+            } else if (nameLower.equals("search_and_geocode_tool")) {
+                // Specific brand/chain search (Starbucks, CVS, McDonald's)
                 String query = extractSearchQuery(llmArgs, userMessage);
                 args = buildSearchArgs(query, currentLat, currentLon);
-            } else if (nameLower.contains("geocode_forward") || nameLower.contains("search_geocode")) {
+            } else if (nameLower.equals("category_search_tool")) {
+                // Generic category search (coffee shops, restaurants, gas stations)
                 String query = extractSearchQuery(llmArgs, userMessage);
-                args = buildGeocodeArgs(query);
-            } else if (nameLower.contains("geocode_reverse") || nameLower.contains("reverse_geocode")) {
+                args = buildCategoryArgs(query, currentLat, currentLon);
+            } else if (nameLower.equals("directions_tool")) {
+                args = buildDirectionsArgs(currentLat, currentLon, homeAddress);
+            } else if (nameLower.equals("reverse_geocode_tool")) {
                 args = buildReverseGeocodeArgs(currentLat, currentLon);
+            } else if (nameLower.equals("static_map_image_tool")) {
+                args = buildMapArgs(currentLat, currentLon);
+            } else if (nameLower.contains("direction")) {
+                // Fallback for any directions variant
+                args = buildDirectionsArgs(currentLat, currentLon, homeAddress);
+            } else if (nameLower.contains("search") || nameLower.contains("poi")
+                       || nameLower.contains("category") || nameLower.contains("geocode")) {
+                // Fallback for any search/geocode variant
+                String query = extractSearchQuery(llmArgs, userMessage);
+                args = buildSearchArgs(query, currentLat, currentLon);
             } else if (nameLower.contains("static_map") || nameLower.contains("map_image")) {
                 args = buildMapArgs(currentLat, currentLon);
             } else {
@@ -100,7 +115,21 @@ public class ToolArgSanitizer {
     }
 
     /**
-     * POI Search: query from user, location from GPS.
+     * Ground Location: combined reverse geocode + nearby POI query.
+     * The ground_location_tool takes lat/lon + a natural language query.
+     */
+    private static JSONObject buildGroundLocationArgs(String query, double lat, double lon)
+            throws Exception {
+        JSONObject args = new JSONObject();
+        args.put("latitude", lat);
+        args.put("longitude", lon);
+        args.put("query", query);
+        return args;
+    }
+
+    /**
+     * Brand/POI Search (search_and_geocode_tool): specific brand like Starbucks, CVS.
+     * Proximity lat/lon narrows results to nearby.
      */
     private static JSONObject buildSearchArgs(String query, double lat, double lon)
             throws Exception {
@@ -112,11 +141,15 @@ public class ToolArgSanitizer {
     }
 
     /**
-     * Forward Geocode: just the query text.
+     * Category Search (category_search_tool): generic category like "coffee shops".
+     * Uses proximity lat/lon to find nearby matches.
      */
-    private static JSONObject buildGeocodeArgs(String query) throws Exception {
+    private static JSONObject buildCategoryArgs(String query, double lat, double lon)
+            throws Exception {
         JSONObject args = new JSONObject();
         args.put("query", query);
+        args.put("longitude", lon);
+        args.put("latitude", lat);
         return args;
     }
 
