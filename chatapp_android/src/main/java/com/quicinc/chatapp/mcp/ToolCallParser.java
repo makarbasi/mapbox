@@ -40,64 +40,124 @@ public class ToolCallParser {
     };
 
     /**
-     * hasToolCall: Checks whether the LLM output contains any tool call.
-     * Looks for known tool names OR "name" + "arguments" JSON pattern.
+     * hasToolCall: Checks whether the LLM output contains any known tool name.
+     * Format-agnostic — we don't care HOW the model mentions the tool,
+     * just that it mentions a known tool name at all.
      */
     public static boolean hasToolCall(String llmOutput) {
         if (llmOutput == null || llmOutput.isEmpty()) return false;
-
         String lower = llmOutput.toLowerCase();
-
-        // Check for any known tool name in the output
         for (String tool : KNOWN_TOOLS) {
             if (lower.contains(tool.toLowerCase())) {
-                // Tool name found — check if it looks like a call (not just a mention)
-                if (lower.contains("\"name\"") || lower.contains("<" + tool.toLowerCase())
-                    || lower.contains("arguments")
-                    || lower.contains("[" + tool.toLowerCase() + "(")
-                    || lower.contains(tool.toLowerCase() + "(")) {
-                    return true;
-                }
+                return true;
             }
         }
-
-        // Check for generic tool_call tags
-        if (lower.contains("<tool_call>")) return true;
-
         return false;
     }
 
     /**
      * parse: Extracts a tool call from LLM output.
-     * Tries multiple strategies in order of reliability.
+     *
+     * FORMAT-AGNOSTIC APPROACH: The 3B model invents a new format every time:
+     *   - [tool(key=val)]           bracket calls
+     *   - <tool key="val" />        XML self-closing attributes
+     *   - <tool_call>{"name":...}   JSON in tags
+     *   - <tool>content</tool>      XML tags
+     *   - tool(key=val)             bare function calls
+     *
+     * Instead of parsing each format, we just:
+     *   1. Find which known tool name appears in the output
+     *   2. Extract whatever looks like a search query from the surrounding text
+     *   3. Let ToolArgSanitizer build the real MCP arguments from GPS/context
      */
     public static ToolCall parse(String llmOutput) {
         if (llmOutput == null || llmOutput.isEmpty()) return null;
 
-        // Strategy 0: Bracket function-call syntax [tool_name(key=val, ...)]
-        ToolCall result = parseBracketFunctionCall(llmOutput);
-        if (result != null) return result;
+        String lower = llmOutput.toLowerCase();
 
-        // Strategy 0.5: XML self-closing tag <tool_name key="val" ... />
-        // The 3B model often outputs this HTML/XML attribute format.
-        result = parseXmlSelfClosingTag(llmOutput);
-        if (result != null) return result;
+        // Find the first known tool name in the output
+        String foundTool = null;
+        int toolIdx = Integer.MAX_VALUE;
+        for (String tool : KNOWN_TOOLS) {
+            int idx = lower.indexOf(tool.toLowerCase());
+            if (idx >= 0 && idx < toolIdx) {
+                foundTool = tool;
+                toolIdx = idx;
+            }
+        }
 
-        // Strategy 1: Standard <tool_call>{json}</tool_call>
-        result = parseStandardTags(llmOutput);
-        if (result != null) return result;
+        if (foundTool == null) {
+            Log.w(TAG, "No known tool name found in output");
+            return null;
+        }
 
-        // Strategy 2: Find "name" field and extract tool name + arguments
-        result = parseJsonPattern(llmOutput);
-        if (result != null) return result;
+        Log.i(TAG, "Found tool name: " + foundTool + " at position " + toolIdx);
 
-        // Strategy 3: Find <toolname> tag (with or without closing >)
-        result = parseToolNameTag(llmOutput);
-        if (result != null) return result;
+        // Extract a query hint from the LLM output.
+        // The model puts the search term in various places:
+        //   q="CVS", query="Starbucks", (query="coffee"), etc.
+        String query = extractQueryFromOutput(llmOutput);
 
-        Log.w(TAG, "No parseable tool call found");
+        // Build a minimal arguments object with just the query
+        JSONObject arguments = new JSONObject();
+        try {
+            if (query != null && !query.isEmpty()) {
+                arguments.put("query", query);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to build query arg: " + e.getMessage());
+        }
+
+        Log.e("toolcalling", "Parsed tool: " + foundTool + " query=" + query);
+        return new ToolCall(foundTool, arguments);
+    }
+
+    /**
+     * Extract a search query from the LLM output text.
+     * Looks for common patterns the model uses to specify the search term.
+     */
+    private static String extractQueryFromOutput(String output) {
+        // Try to find query/q/search value in various formats:
+        //   q="CVS"  query="Starbucks"  query='coffee'  q=CVS
+        //   "query": "CVS"
+        String[] queryKeys = {"query", "q", "search", "name"};
+        for (String key : queryKeys) {
+            // Pattern: key="value" or key='value' (XML/function-call style)
+            Pattern p = Pattern.compile(
+                key + "\\s*=\\s*[\"']([^\"']+)[\"']",
+                Pattern.CASE_INSENSITIVE
+            );
+            Matcher m = p.matcher(output);
+            if (m.find()) {
+                String val = m.group(1).trim();
+                if (!val.isEmpty() && !val.equals("...")) {
+                    Log.i(TAG, "Extracted query via " + key + "= pattern: " + val);
+                    return val;
+                }
+            }
+
+            // Pattern: "key": "value" (JSON style)
+            Pattern pJson = Pattern.compile(
+                "\"" + key + "\"\\s*:\\s*\"([^\"]+)\"",
+                Pattern.CASE_INSENSITIVE
+            );
+            Matcher mJson = pJson.matcher(output);
+            if (mJson.find()) {
+                String val = mJson.group(1).trim();
+                if (!val.isEmpty()) {
+                    Log.i(TAG, "Extracted query via JSON \"" + key + "\": " + val);
+                    return val;
+                }
+            }
+        }
+
+        // No explicit query found — ToolArgSanitizer will extract from user message
+        Log.i(TAG, "No query found in LLM output, will use user message fallback");
         return null;
     }
+
+    // === Legacy parse strategies kept as fallbacks (called from above if needed) ===
+
 
     /**
      * Strategy 0: Parse bracket function-call syntax.
